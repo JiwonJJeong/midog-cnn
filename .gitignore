@@ -1,3 +1,5 @@
 images/
 cropped_images/
 .ipynb_checkpoints/
+
+*.zip

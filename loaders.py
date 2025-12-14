@@ -65,81 +65,127 @@ def image_to_df():
     )
     return df_merged
 
-def create_loaders(df_merged, filters=None):
 
+import pandas as pd
+from torch.utils.data import DataLoader
+from torchvision import transforms # Needed for default transform
+from typing import Tuple, Optional
+import os
+
+# NOTE: Assumes apply_dataframe_filters, create_stratified_data_splits, 
+# and CustomSingleAnnotationDataset are defined in the environment.
+
+def create_loaders(df_merged: pd.DataFrame, 
+                   patch_dir: str = "", 
+                   filters: Optional[dict] = None, 
+                   train_transform=None, # Renamed for clarity
+                   eval_transform=None,  # New: Deterministic transform for Val/Test
+                   final_train: bool = False) -> Tuple[DataLoader, Optional[DataLoader], Optional[DataLoader]]:
+    """
+    Creates and returns Train, Validation, and Test DataLoaders.
+
+    Args:
+        df_merged (...): The master DataFrame.
+        patch_dir (...): Path to images.
+        filters (...): DataFrame filters.
+        train_transform (callable, optional): PyTorch transform pipeline for the TRAINING set.
+        eval_transform (callable, optional): PyTorch transform pipeline for the VALIDATION/TEST sets (deterministic).
+        final_train (bool): If True, combines Train and Validation data.
+    
+    Returns:
+        Tuple[DataLoader, Optional[DataLoader], Optional[DataLoader]]: (train_loader, val_loader, test_loader)
+    """
+
+    # ... (apply_dataframe_filters function definition remains here) ...
+    # Placeholder for the helper function (needed for the context to run):
     def apply_dataframe_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
-        """
-        Applies a dictionary of key-value filters (column: value) to a DataFrame.
-        Returns the filtered DataFrame.
-        """
-        if not filters:
-            return df # No filters to apply
-    
-        print(f"Applying filters: {filters}")
-        
-        # Start with a mask of all True values
-        mask = pd.Series(True, index=df.index) 
-        
-        # Iterate through the dictionary and build the complex mask
+        if not filters: return df
+        mask = pd.Series(True, index=df.index)
         for column, value in filters.items():
-            if column in df.columns:
-                # Combine the current condition with the existing mask using logical AND (&)
-                mask &= (df[column] == value)
-            else:
-                print(f"Warning: Filter column '{column}' not found in DataFrame. Skipping.")
-    
-        # Apply the final mask and reset the index for clean splitting later
+             if column in df.columns: mask &= (df[column] == value)
         df_filtered = df[mask].reset_index(drop=True)
-        print(f"Original size: {len(df)}. Filtered size: {len(df_filtered)}.")
-        
         return df_filtered
     
-    # 1. APPLY FILTERING FIRST (If filters are provided)
+    # 1. APPLY FILTERING FIRST
     if filters:
         df_merged = apply_dataframe_filters(df_merged, filters)
     
-    # Check if any data remains after filtering
     if len(df_merged) == 0:
         print("ERROR: No data remaining after filtering. Cannot create loaders.")
         return None, None, None
-        
-    # 2. THEN DEFINE THE SPLITS (70% Train, 15% Val, 15% Test)
-    # This ensures the splits are based *only* on the data you want to use.
-    df_train, df_val, df_test = create_stratified_data_splits(
+
+    # 2. DEFINE THE SPLITS (70% Train, 15% Val, 15% Test)
+    # NOTE: Assumes create_stratified_data_splits is available
+    df_train_full, df_val, df_test = create_stratified_data_splits(
         df_merged, 
         test_size=0.15, 
         val_size=0.15, 
         random_state=42
     )
-    
-    # 3. Instantiate Datasets (No need to pass 'filters' anymore)
-    IMAGE_DIR = 'cropped_images/'
-    data_transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-    
-    # Instantiate Datasets
-    train_dataset = CustomSingleAnnotationDataset(df_train, IMAGE_DIR, transform=data_transform)
-    val_dataset = CustomSingleAnnotationDataset(df_val, IMAGE_DIR, transform=data_transform)
-    test_dataset = CustomSingleAnnotationDataset(df_test, IMAGE_DIR, transform=data_transform)
-    
-    # Instantiate DataLoaders
-    BATCH_SIZE = 32
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0) # No shuffle for validation
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0) # No shuffle for testing
-    
-    print("\nTrain/Validation/Test DataLoaders created successfully.")
-    print(f"Train Loader batch size: {BATCH_SIZE}")
-    print(f"Train Loader output shape: [Batch_Size, 3, 50, 50] (Verification)")
-    
-    # Optional: Verify the first batch's shape and labels
-    for i, batch in enumerate(train_loader):
-        print(f"\nVerification Batch 1:")
-        print("  Image Batch Shape:", batch['image'].shape) 
-        print("  Labels in Batch (first 5):", batch['label'][:5])
-        break
 
+    # 3. COMBINATION LOGIC for Final Training
+    if final_train:
+        df_train_source = pd.concat([df_train_full, df_val], ignore_index=True)
+        df_val_source = pd.DataFrame() # Empty
+        df_test_source = df_test
+        val_loader = None
+        
+        # In final_train mode, use the provided train_transform for the large training set.
+        # Use the deterministic eval_transform for the final test set report.
+        train_data_transform = train_transform
+        eval_data_transform = eval_transform or transforms.Compose([transforms.ToTensor()])
+        
+        print(f"\n--- Final Training Mode Activated (Train + Val Combined) ---")
+        
+    else:
+        # Standard Training/Hparam Tuning Mode
+        df_train_source = df_train_full
+        df_val_source = df_val
+        df_test_source = df_test
+        val_loader = None 
+        
+        # Use provided train_transform for training (with augmentation)
+        train_data_transform = train_transform
+        # Use provided eval_transform for evaluation (deterministic)
+        eval_data_transform = eval_transform
+
+    # 4. Handle Default Transformations
+    if train_data_transform is None:
+        train_data_transform = transforms.Compose([transforms.ToTensor()])
+        print("Warning: No train_transform provided. Defaulting to ToTensor().")
+
+    if eval_data_transform is None:
+        # If no eval_transform is given, just use the train_transform (may include augmentation)
+        # This is okay since the user controls the input, but should be noted.
+        eval_data_transform = train_data_transform
+        print("Warning: No eval_transform provided. Validation/Test will use train_transform.")
+
+
+    # 5. Define Image Directory and Batch Size
+    IMAGE_DIR = patch_dir + 'cropped_images/'
+    BATCH_SIZE = 32
+    
+    # 6. Instantiate Datasets and DataLoaders
+    
+    # --- Train Loader ---
+    train_dataset = CustomSingleAnnotationDataset(df_train_source, IMAGE_DIR, transform=train_data_transform)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+
+    # --- Validation Loader (Only created if not in final_train mode) ---
+    if not df_val_source.empty:
+        val_dataset = CustomSingleAnnotationDataset(df_val_source, IMAGE_DIR, transform=eval_data_transform) # <-- FIXED!
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+    
+    # --- Test Loader ---
+    if not df_test_source.empty:
+        test_dataset = CustomSingleAnnotationDataset(df_test_source, IMAGE_DIR, transform=eval_data_transform) # <-- FIXED!
+        test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+    else:
+        test_loader = None
+
+    print("\nDataLoaders created successfully.")
+    print(f"Train Loader batch size: {BATCH_SIZE}")
+            
     return train_loader, val_loader, test_loader
 
 class CustomSingleAnnotationDataset(Dataset):
