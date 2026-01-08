@@ -1,14 +1,14 @@
 # midog-cnn
 Demonstration of covariate shift and solutions for classification of mitotic figures across domains given varying access to cross-domain data.
 
-[Scientific report](.final_report.pdf)
+[Scientific report](./final_report.pdf)
 
 **Abstract**
 
 *Incremental investigation of the MIDOG++ dataset provided insights about covariate shifts in the classification of mitotic figures of cancer histology images. For single domain classification, AlexNet based models performed well. As the task grew to require cross domain generaliz ability, basic training methods were still performant when the target domain label data is accessible, but single domain trained models failed under covariate shifts. When target labels are removed or target distributions are entirely unavailable, empirical weighted risk minimization and meta-learning domain generalization algorithms allow models to generalize across covariate shifts. A final AlexNet-based model was trained with various covariate shift corrections to achieve a 0.6854 F1 score while naive algorithms achieved 0.6093.*
 
 # Experiments
-[Scientific report](.final_report.pdf)
+[Scientific report](./final_report.pdf)
 1. Single-domain classification
     1. Baseline CNNs
     2. Factorizing improvements to AlexNet
